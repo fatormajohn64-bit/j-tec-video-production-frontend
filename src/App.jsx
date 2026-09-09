@@ -1,469 +1,170 @@
 import { useEffect, useRef, useState } from "react";
 
-const API_URL =
-  "https://j-tec-video-production-backend.onrender.com";
+const API_URL = import.meta.env.VITE_API_BASE_URL || "https://j-tec-video-production-backend.onrender.com";
+const MAX_CHARS = 500;
 
 const STYLES = [
-  {
-    id: "cinematic",
-    name: "Cinematic",
-    icon: "🎬",
-    description: "Epic & dramatic",
-  },
-  {
-    id: "dark",
-    name: "Dark",
-    icon: "🌑",
-    description: "Moody & mysterious",
-  },
-  {
-    id: "soft",
-    name: "Soft",
-    icon: "☁️",
-    description: "Peaceful & emotional",
-  },
-  {
-    id: "colourful",
-    name: "Colourful",
-    icon: "🌈",
-    description: "Bright & energetic",
-  },
-  {
-    id: "powerful",
-    name: "Powerful",
-    icon: "⚡",
-    description: "Strong & intense",
-  },
+  { id: "cinematic", name: "Cinematic", desc: "Epic & dramatic" },
+  { id: "dark", name: "Dark", desc: "Moody & mysterious" },
+  { id: "soft", name: "Soft", desc: "Peaceful & emotional" },
+  { id: "colourful", name: "Colourful", desc: "Bright & energetic" },
+  { id: "powerful", name: "Powerful", desc: "Strong & intense" },
 ];
 
-function App() {
+export default function App() {
+  const [isOnline, setIsOnline] = useState(null);
   const [quote, setQuote] = useState("");
   const [style, setStyle] = useState("cinematic");
-
+  const [phase, setPhase] = useState("idle"); // idle | generating | done | error
+  const [statusText, setStatusText] = useState("");
   const [jobId, setJobId] = useState(null);
-  const [status, setStatus] = useState("idle");
-  const [progress, setProgress] = useState(0);
-
-  const [scene, setScene] = useState(null);
-  const [videoUrl, setVideoUrl] = useState(null);
-  const [error, setError] = useState("");
-
+  const [errorMsg, setErrorMsg] = useState("");
   const pollRef = useRef(null);
 
   useEffect(() => {
-    return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-      }
-    };
+    fetch(`${API_URL}/`)
+      .then((r) => setIsOnline(r.ok))
+      .catch(() => setIsOnline(false));
+    return () => clearInterval(pollRef.current);
   }, []);
 
-  const startGeneration = async () => {
-    setError("");
-    setVideoUrl(null);
-    setScene(null);
-    setProgress(0);
-
-    const cleanQuote = quote.trim();
-
-    if (cleanQuote.length < 3) {
-      setError("Please enter at least 3 characters.");
-      return;
-    }
-
-    if (cleanQuote.length > 500) {
-      setError("Your quote cannot exceed 500 characters.");
-      return;
-    }
-
-    try {
-      setStatus("starting");
-
-      const response = await fetch(`${API_URL}/api/v1/videos`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          quote: cleanQuote,
-          style,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(
-          `Server returned ${response.status}`
-        );
-      }
-
-      const data = await response.json();
-
-      if (!data.job_id) {
-        throw new Error("The server did not return a job ID.");
-      }
-
-      setJobId(data.job_id);
-      setStatus(data.status || "queued");
-
-      pollJob(data.job_id);
-    } catch (err) {
-      setStatus("failed");
-      setError(
-        "Could not start video generation. The server may be waking up. Please try again."
-      );
-    }
-  };
-
-  const pollJob = (id) => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-    }
-
-    const checkStatus = async () => {
+  const startPolling = (id) => {
+    pollRef.current = setInterval(async () => {
       try {
-        const response = await fetch(
-          `${API_URL}/api/v1/videos/${id}`
-        );
-
-        if (!response.ok) {
-          throw new Error("Unable to check video status.");
-        }
-
-        const data = await response.json();
-
-        setStatus(data.status);
-        setProgress(data.progress || 0);
-
-        if (data.scene) {
-          setScene(data.scene);
-        }
-
+        const res = await fetch(`${API_URL}/api/v1/videos/${id}`);
+        const data = await res.json();
+        setStatusText(data.status || "processing");
         if (data.status === "completed") {
           clearInterval(pollRef.current);
-
-          setVideoUrl(
-            `${API_URL}/api/v1/videos/${id}/file`
-          );
-        }
-
-        if (data.status === "failed") {
+          setPhase("done");
+        } else if (data.status === "failed") {
           clearInterval(pollRef.current);
-
-          setError(
-            data.error ||
-              "Video generation failed."
-          );
+          setErrorMsg(data.message || "Video generation failed.");
+          setPhase("error");
         }
-      } catch (err) {
-        console.error(err);
+      } catch (e) {
+        clearInterval(pollRef.current);
+        setErrorMsg("Lost connection while checking progress.");
+        setPhase("error");
       }
-    };
-
-    checkStatus();
-
-    pollRef.current = setInterval(
-      checkStatus,
-      2000
-    );
+    }, 2000);
   };
 
-  const resetGenerator = () => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
+  const handleGenerate = async () => {
+    const trimmed = quote.trim();
+    if (!trimmed) {
+      setErrorMsg("Enter a quote first.");
+      return;
     }
+    if (trimmed.length > MAX_CHARS) {
+      setErrorMsg(`Keep it under ${MAX_CHARS} characters.`);
+      return;
+    }
+    setErrorMsg("");
+    setPhase("generating");
+    setStatusText("queued");
+    try {
+      const res = await fetch(`${API_URL}/api/v1/videos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quote: trimmed, style }),
+      });
+      if (!res.ok) throw new Error("Server rejected the request.");
+      const data = await res.json();
+      setJobId(data.job_id);
+      startPolling(data.job_id);
+    } catch (e) {
+      setErrorMsg("Couldn't reach the server. Try again.");
+      setPhase("error");
+    }
+  };
 
+  const reset = () => {
     setQuote("");
     setJobId(null);
-    setStatus("idle");
-    setProgress(0);
-    setScene(null);
-    setVideoUrl(null);
-    setError("");
+    setStatusText("");
+    setErrorMsg("");
+    setPhase("idle");
   };
 
-  const isGenerating =
-    status !== "idle" &&
-    status !== "completed" &&
-    status !== "failed";
-
-  const statusText = {
-    starting: "Starting...",
-    queued: "Waiting in queue...",
-    analyzing: "Analyzing your quote...",
-    finding_visual: "Finding the perfect visual...",
-    scene_ready: "Preparing cinematic scene...",
-    rendering: "Creating your video...",
-    ready_for_render: "Preparing renderer...",
-    completed: "Your video is ready!",
-    failed: "Generation failed",
-  };
+  const charsLeft = MAX_CHARS - quote.length;
+  const countClass = charsLeft < 0 ? "limit" : charsLeft < 50 ? "warn" : "";
+  const videoUrl = jobId ? `${API_URL}/api/v1/videos/${jobId}/file` : null;
 
   return (
-    <div className="app">
-
-      <header className="header">
+    <div className="page">
+      <div className="header">
         <div className="brand">
-          <div className="brand-mark">
-            JT
-          </div>
-
-          <div>
-            <div className="brand-name">
-              J TEC
-            </div>
-
-            <div className="brand-subtitle">
-              VIDEO PRODUCTION
-            </div>
-          </div>
+          <div className="brand-mark">J TEC</div>
+          <div className="brand-sub">VIDEO PRODUCTION</div>
         </div>
-
-        <div className="status-dot">
-          <span></span>
-          ONLINE
+        <div className="status">
+          <span className={`status-dot ${isOnline === null ? "" : isOnline ? "online" : "offline"}`} />
+          {isOnline === null ? "checking" : isOnline ? "online" : "offline"}
         </div>
-      </header>
+      </div>
 
-      <main className="container">
-
-        <section className="hero">
-          <div className="badge">
-            ✦ AI CINEMATIC VIDEO CREATOR
+      {phase === "idle" || phase === "error" ? (
+        <>
+          <div className="hero">
+            <h1>Turn a quote into a film.</h1>
+            <p>Write a motivational line, pick a mood, and we'll cut it into a cinematic vertical short.</p>
           </div>
-
-          <h1>
-            Turn Your Words
-            <br />
-            Into <span>Cinematic Videos.</span>
-          </h1>
-
-          <p>
-            Enter a motivational quote and J TEC
-            will transform your words into a
-            beautiful cinematic short.
-          </p>
-        </section>
-
-        <section className="generator">
 
           <div className="card">
-
-            <div className="card-header">
-              <div>
-                <h2>Your Motivation</h2>
-                <p>
-                  Write something worth remembering.
-                </p>
-              </div>
-
-              <div className="counter">
-                {quote.length}/500
-              </div>
-            </div>
-
+            <label className="field-label">Your quote</label>
             <textarea
+              className="quote-input"
+              placeholder="Never give up. Your time is coming."
               value={quote}
-              onChange={(e) =>
-                setQuote(e.target.value.slice(0, 500))
-              }
-              placeholder="Never give up. Your time is coming..."
-              disabled={isGenerating}
+              maxLength={MAX_CHARS + 20}
+              onChange={(e) => setQuote(e.target.value)}
             />
-
-            <div className="quote-tip">
-              💡 Short, powerful quotes usually
-              look best on screen.
-            </div>
+            <div className={`char-count ${countClass}`}>{charsLeft} characters left</div>
           </div>
 
           <div className="card">
-
-            <div className="card-header">
-              <div>
-                <h2>Choose Your Style</h2>
-                <p>
-                  Select the feeling of your video.
-                </p>
-              </div>
-            </div>
-
-            <div className="styles">
-
-              {STYLES.map((item) => (
+            <label className="field-label">Visual style</label>
+            <div className="style-grid">
+              {STYLES.map((s) => (
                 <button
-                  key={item.id}
-                  className={`style ${
-                    style === item.id
-                      ? "selected"
-                      : ""
-                  }`}
-                  onClick={() =>
-                    setStyle(item.id)
-                  }
-                  disabled={isGenerating}
+                  key={s.id}
+                  className={`style-chip ${style === s.id ? "selected" : ""}`}
+                  onClick={() => setStyle(s.id)}
                 >
-                  <span className="style-icon">
-                    {item.icon}
-                  </span>
-
-                  <span className="style-info">
-                    <strong>
-                      {item.name}
-                    </strong>
-
-                    <small>
-                      {item.description}
-                    </small>
-                  </span>
-
-                  <span className="check">
-                    {style === item.id
-                      ? "✓"
-                      : ""}
-                  </span>
+                  <div className="name">{s.name}</div>
+                  <div className="desc">{s.desc}</div>
                 </button>
               ))}
-
             </div>
           </div>
 
-          {error && (
-            <div className="error">
-              ⚠️ {error}
-            </div>
-          )}
+          <button className="generate-btn" onClick={handleGenerate} disabled={!quote.trim()}>
+            Generate video
+          </button>
+          {errorMsg && <div className="error-box">{errorMsg}</div>}
+        </>
+      ) : null}
 
-          {isGenerating && (
-            <div className="progress-card">
+      {phase === "generating" && (
+        <div className="card progress-wrap">
+          <div className="progress-status">Rendering your video…</div>
+          <div className="progress-bar"><div className="progress-bar-fill" /></div>
+          <div className="progress-status">Status: {statusText}</div>
+        </div>
+      )}
 
-              <div className="progress-top">
-                <span>
-                  {statusText[status] ||
-                    "Creating video..."}
-                </span>
-
-                <strong>
-                  {progress}%
-                </strong>
-              </div>
-
-              <div className="progress-track">
-                <div
-                  className="progress-bar"
-                  style={{
-                    width: `${progress}%`,
-                  }}
-                />
-              </div>
-
-              <div className="job">
-                Job: {jobId}
-              </div>
-            </div>
-          )}
-
-          {!videoUrl && (
-            <button
-              className="generate"
-              onClick={startGeneration}
-              disabled={
-                isGenerating ||
-                quote.trim().length < 3
-              }
-            >
-              <span>✦</span>
-
-              {isGenerating
-                ? "Creating Your Video..."
-                : "Generate Cinematic Video"}
-
-              <span>→</span>
-            </button>
-          )}
-
-          {videoUrl && (
-            <section className="result">
-
-              <div className="result-title">
-                <span>✓</span>
-                <div>
-                  <h2>Your Video Is Ready</h2>
-                  <p>
-                    Created by J TEC Video Production
-                  </p>
-                </div>
-              </div>
-
-              <div className="video-wrapper">
-                <video
-                  src={videoUrl}
-                  controls
-                  playsInline
-                  preload="metadata"
-                />
-              </div>
-
-              <div className="result-actions">
-
-                <a
-                  href={videoUrl}
-                  download={`j-tec-${jobId}.mp4`}
-                  className="download"
-                >
-                  ↓ Download Video
-                </a>
-
-                <button
-                  className="another"
-                  onClick={resetGenerator}
-                >
-                  + Create Another
-                </button>
-
-              </div>
-
-            </section>
-          )}
-
-        </section>
-
-        <section className="features">
-
-          <div>
-            <span>🎯</span>
-            <strong>Smart Visuals</strong>
-            <p>
-              Matching visuals for your message.
-            </p>
+      {phase === "done" && (
+        <div className="card">
+          <div className="video-frame">
+            <video src={videoUrl} controls playsInline />
           </div>
-
-          <div>
-            <span>🎬</span>
-            <strong>Cinematic Motion</strong>
-            <p>
-              Smooth camera movement and effects.
-            </p>
+          <div className="action-row">
+            <a className="btn-secondary" href={videoUrl} download>Download</a>
+            <button className="btn-primary" onClick={reset}>Create another</button>
           </div>
-
-          <div>
-            <span>📱</span>
-            <strong>Social Ready</strong>
-            <p>
-              Vertical format for Shorts and Reels.
-            </p>
-          </div>
-
-        </section>
-
-      </main>
-
-      <footer>
-        © {new Date().getFullYear()} J TEC Video
-        Production
-      </footer>
-
+        </div>
+      )}
     </div>
   );
 }
-
-export default App;
