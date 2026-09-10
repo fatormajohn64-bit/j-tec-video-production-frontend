@@ -11,14 +11,22 @@ const STYLES = [
   { id: "powerful", name: "Powerful", desc: "Strong & intense" },
 ];
 
+const FPS_OPTIONS = [10, 20, 30, 50, 60];
+const DURATION_OPTIONS = [4, 5, 6, 7, 8, 9, 10, 15, 20];
+const IMAGE_COUNT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
 export default function App() {
   const [isOnline, setIsOnline] = useState(null);
   const [quote, setQuote] = useState("");
   const [style, setStyle] = useState("cinematic");
+  const [fps, setFps] = useState(30);
+  const [duration, setDuration] = useState(10);
+  const [numImages, setNumImages] = useState(1);
   const [phase, setPhase] = useState("idle");
   const [statusText, setStatusText] = useState("");
   const [jobId, setJobId] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
+  const [adjustments, setAdjustments] = useState([]);
   const pollRef = useRef(null);
 
   useEffect(() => {
@@ -34,12 +42,15 @@ export default function App() {
         const res = await fetch(`${API_URL}/api/v1/videos/${id}`);
         const data = await res.json();
         setStatusText(data.status || "processing");
+        if (data.adjustments && data.adjustments.length) {
+          setAdjustments(data.adjustments);
+        }
         if (data.status === "completed") {
           clearInterval(pollRef.current);
           setPhase("done");
         } else if (data.status === "failed") {
           clearInterval(pollRef.current);
-          setErrorMsg(data.message || "Video generation failed.");
+          setErrorMsg(data.error || "Video generation failed.");
           setPhase("error");
         }
       } catch (e) {
@@ -61,16 +72,26 @@ export default function App() {
       return;
     }
     setErrorMsg("");
+    setAdjustments([]);
     setPhase("generating");
     setStatusText("queued");
     try {
       const res = await fetch(`${API_URL}/api/v1/videos`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ quote: trimmed, style }),
+        body: JSON.stringify({
+          quote: trimmed,
+          style,
+          fps,
+          duration_seconds: duration,
+          num_images: numImages,
+        }),
       });
       if (!res.ok) throw new Error("Server rejected the request.");
       const data = await res.json();
+      if (data.adjustments && data.adjustments.length) {
+        setAdjustments(data.adjustments);
+      }
       setJobId(data.job_id);
       startPolling(data.job_id);
     } catch (e) {
@@ -84,6 +105,7 @@ export default function App() {
     setJobId(null);
     setStatusText("");
     setErrorMsg("");
+    setAdjustments([]);
     setPhase("idle");
   };
 
@@ -139,6 +161,51 @@ export default function App() {
             </div>
           </div>
 
+          <div className="card">
+            <label className="field-label">Frame rate</label>
+            <div className="pill-row">
+              {FPS_OPTIONS.map((f) => (
+                <button
+                  key={f}
+                  className={`pill ${fps === f ? "selected" : ""}`}
+                  onClick={() => setFps(f)}
+                >
+                  {f} fps
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="card">
+            <label className="field-label">Duration</label>
+            <div className="pill-row scroll">
+              {DURATION_OPTIONS.map((d) => (
+                <button
+                  key={d}
+                  className={`pill ${duration === d ? "selected" : ""}`}
+                  onClick={() => setDuration(d)}
+                >
+                  {d}s
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="card">
+            <label className="field-label">Number of images</label>
+            <div className="pill-row scroll">
+              {IMAGE_COUNT_OPTIONS.map((n) => (
+                <button
+                  key={n}
+                  className={`pill ${numImages === n ? "selected" : ""}`}
+                  onClick={() => setNumImages(n)}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <button className="generate-btn" onClick={handleGenerate} disabled={!quote.trim()}>
             Generate video
           </button>
@@ -151,6 +218,11 @@ export default function App() {
           <div className="progress-status">Rendering your video…</div>
           <div className="progress-bar"><div className="progress-bar-fill" /></div>
           <div className="progress-status">Status: {statusText}</div>
+          {adjustments.length > 0 && (
+            <div className="adjustment-note">
+              {adjustments.map((note, i) => <div key={i}>{note}</div>)}
+            </div>
+          )}
         </div>
       )}
 
@@ -159,6 +231,11 @@ export default function App() {
           <div className="video-frame">
             <video src={videoUrl} controls playsInline />
           </div>
+          {adjustments.length > 0 && (
+            <div className="adjustment-note">
+              {adjustments.map((note, i) => <div key={i}>{note}</div>)}
+            </div>
+          )}
           <div className="action-row">
             <a className="btn-secondary" href={videoUrl} download>Download</a>
             <button className="btn-primary" onClick={reset}>Create another</button>
@@ -167,4 +244,4 @@ export default function App() {
       )}
     </div>
   );
-      }
+}
